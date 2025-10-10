@@ -1,47 +1,59 @@
-# Mirror from rsync://mirror.funami.tech/arch-mact2 every 1 hour and upload to GitHub release in NoaHimesaka1873/arch-mact2-mirror repository
+# Mirror from rsync://mirror.funami.tech/arch-mact2 every 1 hour and upload to a GitHub release
 name: Mirror
 
 on:
   schedule:
-    - cron: '0 */3 * * *'
+    # Runs at the top of every hour (Corrected from every 3 hours)
+    - cron: '0 * * * *'
   workflow_dispatch:
+
+env:
+  # This automatically uses the correct repository name, e.g., "YourUsername/arch-mact2-mirror"
+  GH_REPO: ${{ github.repository }}
+  RELEASE_TAG: latest # Use a consistent tag name for the release
 
 jobs:
   Download-and-upload:
     runs-on: ubuntu-latest
+    
+    # --- IMPORTANT FIX ---
+    # This block grants the necessary permissions to the GITHUB_TOKEN
+    # for creating releases and managing the cache.
+    permissions:
+      contents: write  # Required to create/manage releases and their assets
+      actions: write   # Required to save/manage the cache
+      
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Install rsync
+        run: sudo apt-get update && sudo apt-get install -y rsync
 
-      - name: Get Cache
-        uses: actions/cache/restore@v4
+      - name: Restore local mirror from cache
+        uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/repo
-          key: arch-mact2 
-          fail-on-cache-miss: false
-      
-      - name: Delete Cache
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh extension install actions/gh-actions-cache
-          gh actions-cache delete arch-mact2 -R NoaHimesaka1873/arch-mact2-mirror -B senpai --confirm || true
+          key: arch-mact2-mirror-cache
 
-      - name: Download
+      - name: Download updates from mirror
         run: |
+          mkdir -p ${{ github.workspace }}/repo
+          # Syncs the remote mirror to the local ./repo directory
           rsync -avz --delete rsync://mirror.funami.tech/arch-mact2/ ${{ github.workspace }}/repo
 
-      - name: Save Cache
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ github.workspace }}/repo 
-          key: arch-mact2
-
-      - name: Upload
+      - name: Create release and upload assets
         env:
+          # Use the built-in token. The 'permissions' block above gives it power.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd ${{ github.workspace }}/repo/os/x86_64
-          gh release upload release ./* --clobber -R TogiFerretFerret/arch-mact2-mirror
-
-
+          
+          # Check if the release already exists. If not, create it.
+          if ! gh release view ${{ env.RELEASE_TAG }} -R ${{ env.GH_REPO }}; then
+            echo "Release ${{ env.RELEASE_TAG }} not found. Creating it..."
+            gh release create ${{ env.RELEASE_TAG }} -R ${{ env.GH_REPO }} --title "Latest Mirror" --notes "Automated mirror update from $(date --utc)"
+          else
+            echo "Release ${{ env.RELEASE_TAG }} already exists."
+          fi
+          
+          echo "Uploading files to release..."
+          # The --clobber flag will overwrite any files with the same name
+          gh release upload ${{ env.RELEASE_TAG }} ./* -R ${{ env.GH_REPO }} --clobber
